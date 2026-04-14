@@ -21,7 +21,7 @@ python -m ipykernel install --user --name appodeal-de --display-name "Python (ap
 """
 
 [tasks.run]
-description = "Run pipeline. Override inputs after --: mise run run -- --clicks a.json --impressions b.json"
+description = "Run pipeline. Override inputs after --: mise run run -- --clicks a.json --impressions b.json (single files)"
 run = """
 rm -rf output/
 python main.py "$@"

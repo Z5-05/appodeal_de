@@ -4,22 +4,21 @@ from pyspark.sql.types import StructType
 
 def load(
     spark: SparkSession,
-    impressions_path: str,
+    impressions_path: list[str],
     impressions_schema: StructType,
-    clicks_path: str,
+    clicks_path: list[str],
     clicks_schema: StructType,
-    data_format: str = "json",
 ) -> DataFrame:
 
     impressions_df = (
         spark.read.option("multiLine", True)
-        .format(data_format)
+        .format("json")
         .schema(impressions_schema)
         .load(impressions_path)
     )
     clicks_df = (
         spark.read.option("multiLine", True)
-        .format(data_format)
+        .format("json")
         .schema(clicks_schema)
         .load(clicks_path)
     )

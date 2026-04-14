@@ -1,5 +1,5 @@
-from pyspark.sql import DataFrame
 import pyspark.sql.functions as f
+from pyspark.sql import DataFrame
 from pyspark.sql.window import Window
 
 
@@ -18,12 +18,15 @@ def top_advertisers(df: DataFrame) -> DataFrame:
 
     return (
         df.filter(f.col("country_code") != "Unknown")
-        .groupBy("app_id", "country_code", "advertiser_id").agg(
+        .groupBy("app_id", "country_code", "advertiser_id")
+        .agg(
             f.count("impression_id").alias("impressions"),
-            f.sum("revenue").alias("total_revenue"),
+            f.sum(f.coalesce(f.col("revenue"), f.lit(0.0))).alias("total_revenue"),
         )
         .filter(f.col("impressions") >= 5)
-        .withColumn("revenue_per_impression", f.col("total_revenue") / f.col("impressions"))
+        .withColumn(
+            "revenue_per_impression", f.col("total_revenue") / f.col("impressions")
+        )
         .withColumn("rn", f.row_number().over(window))
         .filter(f.col("rn") <= 5)
         .groupBy("app_id", "country_code")
