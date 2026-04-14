@@ -8,30 +8,25 @@ PySpark pipeline for the Appodeal Data Engineering assignment.
 
 ```
 appodeal-de/
-├── main.py                              # entry point — reads args, wires pipeline steps
+├── main.py                              # entry point
 ├── pipeline/
 │   ├── constants.py                     # IMPRESSIONS_SCHEMA, CLICKS_SCHEMA, COUNTRY_CODES_ALPHA2
-│   ├── session.py                       # get_spark()
-│   ├── preprocess.py                    # preprocess_country_code() — normalises invalid codes → "Unknown"
+│   ├── session.py                       # creating SparkSession with local[*]
+│   ├── preprocess.py                    # preprocess field country_code, all non-lambda2 codes are mapped to "Unknown", remove rows with NULL user_id
 │   ├── io/
-│   │   ├── loader.py                    # load() — reads JSONs and left-joins events
-│   │   └── writer.py                   # write() — saves DataFrame as JSON/parquet
-│   └── transforms.py                    # metrics_calculation(), top_advertisers(), median_spend()
-├── tests/
-├── notebooks/
-│   └── EDA.ipynb                        # exploratory analysis, uses pipeline as a package
-├── data/
-│   ├── clicks.json
-│   └── impressions.json
-├── .mise.toml
-└── pyproject.toml
+│   │   ├── loader.py                    # read JSONs and join impressions and clicks
+│   │   └── writer.py                    # write DataFrame as JSON array
+│   └── transforms.py                    # target methods: metrics_calculation(), top_advertisers(), median_spend()
+├── tests/                               # tests
+├── notebooks/                           # EDA analysis
+├── data/                                # input JSONs
+├── .mise.toml                           # mise configuration
+└── pyproject.toml                       # pyproject configuration
 ```
 
 ---
 
-## mise tasks
-
-All commands are run from the project root.
+## mise commands
 
 ### Dependencies
 
@@ -40,11 +35,11 @@ mise run install              # pip install -e '.[dev]'  — pyspark, pytest, ru
 mise run install-notebooks    # pip install -e '.[dev,notebooks]' + register Jupyter kernel
 ```
 
-### Pipeline
+### Main pipeline
 
 ```bash
-mise run run                                                       # defaults: data/input/*.json → output/
-mise run run -- --clicks a.json --impressions b.json               # custom input files
+mise run run                                                                             # defaults: data/input/clicks.json and data/input/impressions.json
+mise run run -- --clicks a.json b.json --impressions c.json d.json                       # multiple input files -> output/
 ```
 
 Writes JSON output to `output/` (previous run is deleted automatically):
@@ -61,32 +56,17 @@ Writes JSON output to `output/` (previous run is deleted automatically):
 mise run notebook    # opens Jupyter Lab from project root
 ```
 
-`pipeline` is importable inside notebooks as a regular package — same code as production.
+`pipeline` is importable inside notebooks as a regular package — same code as production. load, preprocess, get_spark are used for analysis.
 
-### Quality
+### Quality control
 
 ```bash
-mise run test                 # pytest tests/ -v --tb=short
-mise run test -k slow         # only tests that start Spark
-mise run test -k "not slow"   # fast tests only
-
-mise run lint                 # ruff check .
-mise run format               # ruff format .
+mise run test                 # run all tests
+mise run lint                 # check code style
+mise run format               # auto-format code
 ```
 
----
-
-## Environment
-
-Variables activated automatically on directory entry via `.mise.toml`:
-
-| Variable | Value |
-|----------|-------|
-| `PYSPARK_PYTHON` | `python` |
-| `PYSPARK_SUBMIT_ARGS` | suppresses Spark UI console progress |
-| `PYTHONPATH` | project root — `pipeline` importable without pip install as fallback |
-| `DATA_DIR` | `<project_root>/data` |
-| `JUPYTER_PLATFORM_DIRS` | `1` |
+All tests are generated using Claude Code Agent.
 
 ---
 
@@ -94,26 +74,34 @@ Variables activated automatically on directory entry via `.mise.toml`:
 
 Findings from EDA on the sample dataset (1 038 impressions, 705 clicks):
 
-- **NULLs**: `user_id` — 4, `country_code` — 5, `revenue` — 1. Revenue NULLs are coalesced to `0.0` in `median_spend`.
-- **Duplicate rows**: after the left join up to 4× full-row duplicates appear per `impression_id`. Confirmed to be exact copies (all fields identical). Removed with `.distinct()` in `loader.py`; 312 impressions remain without a matching click.
-- **Invalid country codes**: data contains non-ISO values (`XX`, `ZZZ`, `??`, `NaN`). `preprocess_country_code()` maps anything outside the ISO 3166-1 alpha-2 list to `"Unknown"` before aggregation. `"Unknown"` rows are kept in `metrics_calculation` and `median_spend` (the events are real), but excluded from `top_advertisers` (no targetable country signal).
+- **NULLs**: `user_id` — 4, `country_code` — 5, `revenue` — 1. Revenue NULLs are coalesced to `0.0` in `median_spend`. Rows with NULL `user_id` are removed in `preprocess.py`. Why? Because business value without linking to a user is not actionable.
+- **Duplicate rows**: after the left join, the joined dataset contained several identical rows (full-row duplicates). Each impression should represent a single user interaction, so duplicates are treated as bad data. They are removed with `.distinct()` in `loader.py`. After deduplication, 312 impressions still have no matching click.
+- **Invalid country codes**: most rows use plausible ISO 3166-1 alpha-2 codes, but some values are not valid alpha-2 (`XX`, `ZZZ`, `??`, `NaN`, etc.). `preprocess.py` maps anything outside the allowed alpha-2 set to `"Unknown"` before aggregation. Rows with `"Unknown"` are still included in `metrics_calculation` and `median_spend` (the underlying events are valid), but dropped from `top_advertisers` (no reliable country for targeting).
 
 ---
 
 ## Performance & Scalability Notes
 
 1. **Dedup before metrics**  
-   Join produces up to 4× full-row duplicates. Dedup runs once in `loader.py` with `.distinct()`, so all downstream aggregations see unique events. This lets us use `count()` instead of `countDistinct()`, enabling Spark's map-side partial aggregation and avoiding an extra shuffle.
+   The join can create up to four copies of the same full row. Duplicates are removed once in `loader.py` with `.distinct()`. After that, every step works on unique rows.  
+   `count()` is used instead of `countDistinct()`. That is cheaper for Spark: partial aggregation on the map side is possible, with fewer shuffles.
 
 2. **Skew monitoring + salting trigger**  
-   Current sample shows no significant skew — top groups: `(app=1, US)=151`, `(app=2, US)=81`, `(app=1, CA)=75`; US/CA ratio ~`2:1`. No salting applied now.  
-   Trigger: if any `country_code` partition exceeds `~5×` the median partition size, enable salting: `salted_key = concat(country_code, '_', hash(app_id) % N)` with `N = 10`.
+   This sample shows no strong skew. The largest groups are `(app=1, US)=151`, `(app=2, US)=81`, and `(app=1, CA)=75`. The US/CA ratio is about `2:1`. Salting is not used yet.  
+   If one `country_code` partition grows to about five times the median partition size, salting should be enabled. Use `salted_key = concat(country_code, '_', hash(app_id) % N)`, where `N` is the number of salt buckets.
 
 3. **Top advertisers: ROW_NUMBER vs collect_list + sort + slice**  
-   Both approaches produce identical results. We use `ROW_NUMBER` → filter top-5 → `collect_list` because it materialises at most 5 rows per group before building the list.  
-   The alternative (`collect_list` all rows → `sort_array` → `slice`) pulls every row onto reducer nodes first, creating large intermediate arrays that risk OOM on skewed US partitions.
+   Both ways give the same answer. The pipeline uses `ROW_NUMBER`, then keeps the top five rows, then `collect_list`. A long list for the whole group is never built first.  
+   The other way (`collect_list` on all rows, then `sort_array`, then `slice`) sends many rows to a few nodes. That can use a lot of memory and cause OOM on skewed US groups.
 
-4. **Median spend — percentile_approx over exact median**  
-   EDA benchmark compared `median()` against `percentile_approx(0.5, accuracy)` at levels 100 / 1 000 / 10 000. At `accuracy=1000` the result matches the exact median for all real country codes.  
-   The only divergence is in the `"Unknown"` noise bucket (heavily zero-weighted distribution), where the sketch at low accuracy collapses to `0` — but that bucket is not a target for business decisions.  
-   We use `percentile_approx("spend", 0.5, 1000)`: accuracy is equivalent to exact for real data, and the function supports partial aggregation across partitions without a full sort.
+4. **Median spend — percentile_approx instead of exact median**  
+   EDA compared `median()` with `percentile_approx(0.5, accuracy)` for accuracy 100, 1 000, and 10 000. With `accuracy=1000`, the result matches the exact median for all real country codes.  
+   The only difference is in the `"Unknown"` bucket. There the distribution has many zeros, and a low-accuracy sketch can return `0`. That bucket is not used for business decisions.  
+   The code uses `percentile_approx("spend", 0.5, 1000)`. For real countries this is close enough to the exact median. It also scales better on large data: partial aggregation across partitions is possible without sorting everything.
+
+### Testing
+
+All tests start a local Spark session (`@pytest.mark.slow`).
+
+- **`test_session.py`**: checks that `get_spark()` returns a running session, shuffle partitions are `8`, and a small DataFrame can be created and collected.
+- **`test_transforms.py`**: checks `preprocess()` (valid codes kept, bad codes → `"Unknown"`, null country → `"Unknown"`, null `user_id` dropped); `metrics_calculation()` (counts, revenue, grouping); `top_advertisers()` (order by revenue per impression, `"Unknown"` excluded, minimum impressions); `median_spend()` (per country, grouping, null revenue as zero).

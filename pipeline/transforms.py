@@ -21,7 +21,7 @@ def top_advertisers(df: DataFrame) -> DataFrame:
         .groupBy("app_id", "country_code", "advertiser_id")
         .agg(
             f.count("impression_id").alias("impressions"),
-            f.sum("revenue").alias("total_revenue"),
+            f.sum(f.coalesce(f.col("revenue"), f.lit(0.0))).alias("total_revenue"),
         )
         .filter(f.col("impressions") >= 5)
         .withColumn(

@@ -6,7 +6,7 @@ pytestmark = pytest.mark.slow
 
 def test_get_spark_returns_active_session(spark):
     assert isinstance(spark, SparkSession)
-    assert not spark.sparkContext._jsc.sc().isStopped()
+    assert spark.sparkContext.defaultParallelism > 0
 
 
 def test_shuffle_partitions_configured(spark):

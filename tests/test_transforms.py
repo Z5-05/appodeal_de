@@ -7,7 +7,7 @@ from pyspark.sql.types import (
     StructType,
 )
 
-from pipeline.preprocess import preprocess_country_code
+from pipeline.preprocess import preprocess
 from pipeline.transforms import median_spend, metrics_calculation, top_advertisers
 
 pytestmark = pytest.mark.slow
@@ -30,28 +30,44 @@ def make_source(spark, rows):
 
 
 # ---------------------------------------------------------------------------
-# preprocess_country_code
+# preprocess
 # ---------------------------------------------------------------------------
+
+PREPROCESS_SCHEMA = StructType(
+    [
+        StructField("user_id", StringType(), True),
+        StructField("country_code", StringType(), True),
+    ]
+)
 
 
 def test_valid_country_codes_are_kept(spark):
-    df = spark.createDataFrame([("US",), ("DE",), ("GB",)], ["country_code"])
-    result = {r.country_code for r in preprocess_country_code(df).collect()}
+    df = spark.createDataFrame(
+        [("u1", "US"), ("u2", "DE"), ("u3", "GB")], PREPROCESS_SCHEMA
+    )
+    result = {r.country_code for r in preprocess(df).collect()}
     assert result == {"US", "DE", "GB"}
 
 
 def test_invalid_country_codes_become_unknown(spark):
-    df = spark.createDataFrame([("XX",), ("ZZZ",), ("??",), ("NaN",)], ["country_code"])
-    result = preprocess_country_code(df).collect()
+    df = spark.createDataFrame(
+        [("u1", "XX"), ("u2", "ZZZ"), ("u3", "??"), ("u4", "NaN")], PREPROCESS_SCHEMA
+    )
+    result = preprocess(df).collect()
     assert all(r.country_code == "Unknown" for r in result)
 
 
 def test_null_country_code_becomes_unknown(spark):
-    df = spark.createDataFrame(
-        [(None,)], StructType([StructField("country_code", StringType(), True)])
-    )
-    result = preprocess_country_code(df).collect()
+    df = spark.createDataFrame([("u1", None)], PREPROCESS_SCHEMA)
+    result = preprocess(df).collect()
     assert result[0].country_code == "Unknown"
+
+
+def test_null_user_id_rows_are_dropped(spark):
+    df = spark.createDataFrame([(None, "US"), ("u1", "US")], PREPROCESS_SCHEMA)
+    result = preprocess(df).collect()
+    assert len(result) == 1
+    assert result[0].user_id == "u1"
 
 
 # ---------------------------------------------------------------------------
