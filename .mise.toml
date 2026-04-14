@@ -1,0 +1,44 @@
+[tools]
+python = "3.11"
+java = "21"
+
+[env]
+PYSPARK_PYTHON = "python"
+PYSPARK_SUBMIT_ARGS = "--conf spark.ui.showConsoleProgress=false pyspark-shell"
+PYTHONPATH = "{{config_root}}"
+DATA_DIR = "{{config_root}}/data/input"
+JUPYTER_PLATFORM_DIRS = "1"
+
+[tasks.install]
+description = "Install Python dependencies"
+run = "pip install -e '.[dev]'"
+
+[tasks.install-notebooks]
+description = "Install Jupyter and EDA dependencies, register Jupyter kernel"
+run = """
+pip install -e '.[dev,notebooks]'
+python -m ipykernel install --user --name appodeal-de --display-name "Python (appodeal-de)"
+"""
+
+[tasks.run]
+description = "Run pipeline. Override inputs after --: mise run run -- --clicks a.json --impressions b.json"
+run = """
+rm -rf output/
+python main.py "$@"
+"""
+
+[tasks.test]
+description = "Run all tests"
+run = "pytest tests/ -v --tb=short"
+
+[tasks.lint]
+description = "Check code style"
+run = "ruff check ."
+
+[tasks.format]
+description = "Auto-format code"
+run = "ruff format ."
+
+[tasks.notebook]
+description = "Start Jupyter Lab for EDA"
+run = "cd {{config_root}} && jupyter lab notebooks/"
