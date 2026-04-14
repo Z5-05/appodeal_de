@@ -44,7 +44,7 @@ mise run install-notebooks    # pip install -e '.[dev,notebooks]' + register Jup
 
 ```bash
 mise run run                                                       # defaults: data/input/*.json → output/
-mise run run -- --clicks a.json b.json --impressions c.json        # multiple input files
+mise run run -- --clicks a.json --impressions b.json               # custom input files
 ```
 
 Writes JSON output to `output/` (previous run is deleted automatically):
